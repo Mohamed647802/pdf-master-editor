@@ -1,6 +1,6 @@
 import {
-  uploadPDF, renderPage, getThumbnail,
-  addText, addImage, drawShape, highlightText, addStickyNote,
+  uploadPDF, renderPage, getThumbnail, getPDFBlob, getOriginalFilename,
+  addText, addImage, drawShape, highlightText, strikethroughText, underlineText, addStickyNote,
   addBlankPage as apiAddBlankPage,
   duplicatePage as apiDuplicatePage,
   deletePage as apiDeletePage,
@@ -223,14 +223,27 @@ function setZoom(value) {
 // ─── HISTORY ──────────────────────────────────────────────────
 function addToHistory(action) {
   state.history = state.history.slice(0, state.historyIndex + 1);
-  state.history.push({ ...action, timestamp: Date.now() });
+  state.history.push({
+    ...action,
+    filename: state.currentFile,
+    totalPages: state.totalPages,
+    timestamp: Date.now()
+  });
   state.historyIndex = state.history.length - 1;
   autoSave();
 }
 
 function undo() {
-  if (state.historyIndex < 0) { showToast('Nothing to undo', 'warning'); return; }
+  if (state.historyIndex <= 0) { showToast('Nothing to undo', 'warning'); return; }
   state.historyIndex--;
+  const entry = state.history[state.historyIndex];
+  if (entry?.filename) {
+    state.currentFile = entry.filename;
+    state.totalPages = entry.totalPages || state.totalPages;
+    if (state.currentPage >= state.totalPages) state.currentPage = Math.max(0, state.totalPages - 1);
+    state.thumbnails = {};
+    renderThumbnailsAsync();
+  }
   showToast('↩ Undo', 'info');
   renderCurrentPage();
 }
@@ -238,6 +251,14 @@ function undo() {
 function redo() {
   if (state.historyIndex >= state.history.length - 1) { showToast('Nothing to redo', 'warning'); return; }
   state.historyIndex++;
+  const entry = state.history[state.historyIndex];
+  if (entry?.filename) {
+    state.currentFile = entry.filename;
+    state.totalPages = entry.totalPages || state.totalPages;
+    if (state.currentPage >= state.totalPages) state.currentPage = Math.max(0, state.totalPages - 1);
+    state.thumbnails = {};
+    renderThumbnailsAsync();
+  }
   showToast('↪ Redo', 'info');
   renderCurrentPage();
 }
@@ -318,27 +339,59 @@ function showLoading(show) {
 }
 
 // ─── FILE SAVE / DOWNLOAD ─────────────────────────────────────
-function downloadFile(blob, name) {
+function blobToDataURL(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function downloadFile(blob, name) {
+  if (window.AndroidBridge && typeof window.AndroidBridge.saveBase64File === 'function') {
+    const dataUrl = await blobToDataURL(blob);
+    window.AndroidBridge.saveBase64File(dataUrl, name, blob.type || 'application/octet-stream');
+    return;
+  }
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
   a.download = name;
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function saveCurrent() {
+async function saveCurrent() {
   if (!state.currentFile) { showToast('No file open', 'warning'); return; }
-  showToast('💾 File saved to server', 'success');
+  try {
+    const blob = await getPDFBlob(state.currentFile);
+    const outName = getOriginalFilename(state.currentFile);
+    if (window.AndroidBridge && typeof window.AndroidBridge.shareBase64File === 'function') {
+      const dataUrl = await blobToDataURL(blob);
+      window.AndroidBridge.shareBase64File(dataUrl, outName, 'application/pdf');
+      showToast('📤 Ready to share / save PDF', 'success');
+    } else {
+      await downloadFile(blob, outName);
+      showToast('💾 File saved', 'success');
+    }
+  } catch (err) {
+    showToast(`❌ Save failed: ${err.message}`, 'error');
+  }
 }
 
-function downloadCurrent() {
+async function downloadCurrent() {
   if (!state.currentFile) { showToast('No file open', 'warning'); return; }
-  const link = document.createElement('a');
-  link.href = `http://localhost:8000/uploads/${state.currentFile}`;
-  link.download = state.currentFile;
-  link.click();
-  showToast('📥 Download started', 'success');
+  try {
+    const blob = await getPDFBlob(state.currentFile);
+    const outName = getOriginalFilename(state.currentFile);
+    await downloadFile(blob, outName);
+    showToast('📥 Saved PDF to Downloads', 'success');
+  } catch (err) {
+    showToast(`❌ Download failed: ${err.message}`, 'error');
+  }
 }
 
 // ─── TEXT TOOL ────────────────────────────────────────────────
@@ -405,7 +458,8 @@ async function submitText() {
     size: parseInt(document.getElementById('text-size')?.value) || 12,
     color: document.getElementById('text-color')?.value || '#000000',
     bold: document.getElementById('btn-bold')?.classList.contains('active') || false,
-    italic: document.getElementById('btn-italic')?.classList.contains('active') || false
+    italic: document.getElementById('btn-italic')?.classList.contains('active') || false,
+    rawCoords: true
   };
 
   hideModal('modal-text');
@@ -503,6 +557,42 @@ async function submitHighlight(params) {
     if (canvas) canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
     await renderCurrentPage();
     showToast('✅ Highlight added', 'success');
+  } catch (err) {
+    showToast(`❌ ${err.message}`, 'error');
+  } finally {
+    showLoading(false);
+  }
+}
+
+async function submitStrikethrough(params) {
+  if (!state.currentFile) return;
+  showLoading(true);
+  try {
+    const result = await strikethroughText(state.currentFile, params);
+    state.currentFile = result.filename || state.currentFile;
+    addToHistory({ type: 'strikethrough', params });
+    const canvas = document.getElementById('draw-canvas');
+    if (canvas) canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+    await renderCurrentPage();
+    showToast('✅ Strikethrough added', 'success');
+  } catch (err) {
+    showToast(`❌ ${err.message}`, 'error');
+  } finally {
+    showLoading(false);
+  }
+}
+
+async function submitUnderline(params) {
+  if (!state.currentFile) return;
+  showLoading(true);
+  try {
+    const result = await underlineText(state.currentFile, params);
+    state.currentFile = result.filename || state.currentFile;
+    addToHistory({ type: 'underline', params });
+    const canvas = document.getElementById('draw-canvas');
+    if (canvas) canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+    await renderCurrentPage();
+    showToast('✅ Underline added', 'success');
   } catch (err) {
     showToast(`❌ ${err.message}`, 'error');
   } finally {
@@ -844,7 +934,9 @@ async function applyMetadata() {
   hideModal('modal-metadata');
   showLoading(true);
   try {
-    await updateMetadata(state.currentFile, params);
+    const result = await updateMetadata(state.currentFile, params);
+    state.currentFile = result.filename || state.currentFile;
+    addToHistory({ type: 'metadata', params });
     showToast('✅ Metadata updated', 'success');
   } catch (err) {
     showToast(`❌ ${err.message}`, 'error');
@@ -1036,12 +1128,16 @@ async function handleImageUpload(file) {
   showLoading(true);
   showToast('⏳ Adding image...', 'info');
   try {
-    const params = { page: state.currentPage, x: 100, y: 100, width: 200, height: 150 };
-    const blob = await addImage(
-      new File([await fetch(`http://localhost:8000/uploads/${state.currentFile}`).then(r => r.blob())], state.currentFile),
-      file, params
-    );
-    if (blob instanceof Blob) downloadFile(blob, 'with-image.pdf');
+    const params = { page: state.currentPage, x: 100, y: 100, width: 200 };
+    const result = await addImage(state.currentFile, file, params);
+    if (result?.filename) {
+      state.currentFile = result.filename;
+      addToHistory({ type: 'addImage', params });
+      state.thumbnails = {};
+      renderThumbnailsAsync();
+    } else if (result instanceof Blob) {
+      await downloadFile(result, 'with-image.pdf');
+    }
     await renderCurrentPage();
     showToast('✅ Image added', 'success');
   } catch (err) {
@@ -1106,6 +1202,8 @@ window.app = {
   submitStickyInput,
   submitDrawShape,
   submitHighlight,
+  submitStrikethrough,
+  submitUnderline,
   applyDrawSettings,
   updateDrawSettings,
   updateHighlightSettings,
