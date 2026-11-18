@@ -57,7 +57,6 @@ export function initDrawCanvas(state) {
   const img = document.getElementById('pdf-page-img');
   if (!canvas || !img) return;
 
-  // Match canvas size to displayed image
   const updateCanvasSize = () => {
     canvas.width = img.clientWidth || img.naturalWidth || 800;
     canvas.height = img.clientHeight || img.naturalHeight || 1000;
@@ -66,46 +65,54 @@ export function initDrawCanvas(state) {
   };
 
   img.addEventListener('load', updateCanvasSize);
+  window.addEventListener('resize', updateCanvasSize);
   if (img.complete) updateCanvasSize();
 
   const ctx = canvas.getContext('2d');
   let drawing = false;
   let startX = 0, startY = 0;
   let snapshot = null;
+  let freehandPoints = [];
 
   const getPos = (e) => {
     const rect = canvas.getBoundingClientRect();
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    const touch = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0]);
+    const clientX = touch ? touch.clientX : e.clientX;
+    const clientY = touch ? touch.clientY : e.clientY;
     return {
       x: clientX - rect.left,
       y: clientY - rect.top
     };
   };
 
-  canvas.addEventListener('mousedown', (e) => {
-    if (!['draw', 'highlight', 'text', 'sticky', 'strikethrough', 'underline'].includes(state.tool)) return;
+  const activeTools = ['draw', 'highlight', 'text', 'sticky', 'strikethrough', 'underline'];
+
+  const handleStart = (e) => {
+    if (!activeTools.includes(state.tool)) return;
+    if (e.cancelable) e.preventDefault();
+    const pos = getPos(e);
+
     if (state.tool === 'text') {
-      const pos = getPos(e);
       window.app.showTextPopover(pos.x, pos.y);
       return;
     }
     if (state.tool === 'sticky') {
-      const pos = getPos(e);
       window.app.showStickyPopover(pos.x, pos.y);
       return;
     }
+
     drawing = true;
-    const pos = getPos(e);
     startX = pos.x;
     startY = pos.y;
+    freehandPoints = [pos];
     snapshot = ctx.getImageData(0, 0, canvas.width, canvas.height);
     state.isDrawing = true;
     state.drawStart = pos;
-  });
+  };
 
-  canvas.addEventListener('mousemove', (e) => {
+  const handleMove = (e) => {
     if (!drawing) return;
+    if (e.cancelable) e.preventDefault();
     const pos = getPos(e);
     ctx.putImageData(snapshot, 0, 0);
 
@@ -117,6 +124,30 @@ export function initDrawCanvas(state) {
     const dx = pos.x - startX;
     const dy = pos.y - startY;
 
+    if (state.tool === 'highlight') {
+      ctx.fillStyle = `${drawSettings.highlightColor || '#FFFF00'}66`;
+      ctx.fillRect(startX, startY, dx, dy);
+      return;
+    }
+    if (state.tool === 'strikethrough') {
+      ctx.strokeStyle = '#EF4444';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(startX, startY + dy / 2);
+      ctx.lineTo(pos.x, startY + dy / 2);
+      ctx.stroke();
+      return;
+    }
+    if (state.tool === 'underline') {
+      ctx.strokeStyle = '#6366F1';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(startX, Math.max(startY, pos.y));
+      ctx.lineTo(pos.x, Math.max(startY, pos.y));
+      ctx.stroke();
+      return;
+    }
+
     ctx.beginPath();
     switch (state.drawShape) {
       case 'rectangle':
@@ -124,7 +155,7 @@ export function initDrawCanvas(state) {
         if (drawSettings.filled) ctx.fill();
         ctx.stroke();
         break;
-      case 'circle':
+      case 'circle': {
         const rx = Math.abs(dx) / 2;
         const ry = Math.abs(dy) / 2;
         const cx = startX + dx / 2;
@@ -133,16 +164,16 @@ export function initDrawCanvas(state) {
         if (drawSettings.filled) ctx.fill();
         ctx.stroke();
         break;
+      }
       case 'line':
         ctx.moveTo(startX, startY);
         ctx.lineTo(pos.x, pos.y);
         ctx.stroke();
         break;
-      case 'arrow':
+      case 'arrow': {
         ctx.moveTo(startX, startY);
         ctx.lineTo(pos.x, pos.y);
         ctx.stroke();
-        // Draw arrowhead
         const angle = Math.atan2(dy, dx);
         const headLen = 15;
         ctx.beginPath();
@@ -152,67 +183,70 @@ export function initDrawCanvas(state) {
         ctx.lineTo(pos.x - headLen * Math.cos(angle + Math.PI / 6), pos.y - headLen * Math.sin(angle + Math.PI / 6));
         ctx.stroke();
         break;
+      }
       case 'freehand':
-        ctx.putImageData(snapshot, 0, 0);
-        break;
-      case 'highlight':
-        ctx.fillStyle = `${drawSettings.highlightColor || '#FFFF00'}88`;
-        ctx.fillRect(startX, startY, dx, dy);
+        freehandPoints.push(pos);
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        if (freehandPoints.length > 0) {
+          ctx.moveTo(freehandPoints[0].x, freehandPoints[0].y);
+          freehandPoints.forEach(pt => ctx.lineTo(pt.x, pt.y));
+        }
+        ctx.stroke();
         break;
     }
-  });
+  };
 
-  canvas.addEventListener('mouseup', (e) => {
+  const handleEnd = (e) => {
     if (!drawing) return;
     drawing = false;
     state.isDrawing = false;
     const pos = getPos(e);
     const imgEl = document.getElementById('pdf-page-img');
-    const scaleX = imgEl ? (imgEl.naturalWidth / imgEl.clientWidth) : 1;
-    const scaleY = imgEl ? (imgEl.naturalHeight / imgEl.clientHeight) : 1;
+    const scaleX = imgEl && imgEl.clientWidth ? (imgEl.naturalWidth / imgEl.clientWidth) : 1;
+    const scaleY = imgEl && imgEl.clientHeight ? (imgEl.naturalHeight / imgEl.clientHeight) : 1;
 
     const params = {
       page: state.currentPage,
       x: Math.min(startX, pos.x) * scaleX,
       y: Math.min(startY, pos.y) * scaleY,
+      x1: startX * scaleX,
+      y1: startY * scaleY,
+      x2: pos.x * scaleX,
+      y2: pos.y * scaleY,
       width: Math.abs(pos.x - startX) * scaleX,
       height: Math.abs(pos.y - startY) * scaleY,
       shape: state.drawShape,
       stroke_color: state.drawSettings?.strokeColor || '#6366F1',
       fill_color: state.drawSettings?.fillColor || '#A78BFA',
       stroke_width: state.drawSettings?.strokeWidth || 2,
-      filled: state.drawSettings?.filled || false
+      filled: state.drawSettings?.filled || false,
+      points: JSON.stringify(freehandPoints.map(p => ({ x: p.x * scaleX, y: p.y * scaleY })))
     };
 
-    if (state.tool === 'draw' && params.width > 5 && params.height > 5) {
-      window.app.submitDrawShape(params);
-    } else if (state.tool === 'highlight' && params.width > 5 && params.height > 5) {
-      window.app.submitHighlight(params);
+    const movedEnough = params.width > 4 || params.height > 4 || freehandPoints.length > 3;
+    if (!movedEnough) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      return;
     }
-  });
 
-  // Freehand drawing
-  let freehandPoints = [];
-  canvas.addEventListener('mousedown', (e) => {
-    if (state.drawShape !== 'freehand' || state.tool !== 'draw') return;
-    freehandPoints = [getPos(e)];
-  });
-  canvas.addEventListener('mousemove', (e) => {
-    if (!drawing || state.drawShape !== 'freehand') return;
-    const pos = getPos(e);
-    freehandPoints.push(pos);
-    ctx.putImageData(snapshot, 0, 0);
-    ctx.beginPath();
-    ctx.strokeStyle = state.drawSettings?.strokeColor || '#6366F1';
-    ctx.lineWidth = state.drawSettings?.strokeWidth || 2;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    if (freehandPoints.length > 0) {
-      ctx.moveTo(freehandPoints[0].x, freehandPoints[0].y);
-      freehandPoints.forEach(pt => ctx.lineTo(pt.x, pt.y));
+    if (state.tool === 'draw') {
+      window.app.submitDrawShape(params);
+    } else if (state.tool === 'highlight') {
+      window.app.submitHighlight(params);
+    } else if (state.tool === 'strikethrough') {
+      window.app.submitStrikethrough?.(params);
+    } else if (state.tool === 'underline') {
+      window.app.submitUnderline?.(params);
     }
-    ctx.stroke();
-  });
+  };
+
+  canvas.addEventListener('mousedown', handleStart);
+  canvas.addEventListener('mousemove', handleMove);
+  canvas.addEventListener('mouseup', handleEnd);
+  canvas.addEventListener('touchstart', handleStart, { passive: false });
+  canvas.addEventListener('touchmove', handleMove, { passive: false });
+  canvas.addEventListener('touchend', handleEnd, { passive: false });
 
   canvas.addEventListener('mouseleave', () => {
     if (drawing) {
