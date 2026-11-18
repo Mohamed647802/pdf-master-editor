@@ -1,15 +1,18 @@
 {
   "name": "pdf-master",
-  "version": "1.0.0",
-  "description": "Full-featured PDF Editor",
+  "version": "2.0.0",
+  "type": "module",
+  "description": "Full-featured PDF Editor (Web & Android)",
   "scripts": {
     "dev": "vite --port 3000",
-    "build": "vite build",
+    "build": "vite build --base=./",
     "preview": "vite preview"
   },
   "dependencies": {
-    "pdfjs-dist": "^3.11.174",
-    "axios": "^1.6.2"
+    "axios": "^1.6.2",
+    "jszip": "^3.10.1",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^3.11.174"
   },
   "devDependencies": {
     "vite": "^5.0.0"
