@@ -2,16 +2,11 @@
 <html lang="en" dir="ltr">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
   <meta name="description" content="PDF Master Editor - Full-featured PDF editing application">
-  <meta name="theme-color" content="#6366F1">
-  <link rel="manifest" href="./public/manifest.json">
+  <meta name="theme-color" content="#0F0F1A">
+  <link rel="manifest" href="./manifest.json">
   <title>📄 PDF Master Editor</title>
-
-  <!-- Preconnect to Google Fonts -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 
   <link rel="stylesheet" href="./src/styles/main.css">
 
@@ -19,12 +14,41 @@
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📄</text></svg>">
 
   <style>
-    /* Inline critical styles for initial render */
+    /* Inline critical styles for initial render & Android responsiveness */
     body {
       background: #0F0F1A;
       color: #F0F0FF;
       margin: 0;
       overflow: hidden;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .pdf-page-img {
+      max-width: calc(100vw - 24px);
+      height: auto;
+      display: block;
+      user-select: none;
+      -webkit-user-drag: none;
+    }
+    @media (max-width: 768px) {
+      .toolbar {
+        padding: 6px 8px;
+        gap: 4px;
+        -webkit-overflow-scrolling: touch;
+      }
+      .status-bar {
+        overflow-x: auto;
+        white-space: nowrap;
+        font-size: 11px;
+      }
+      #toast-container {
+        right: 12px;
+        left: 12px;
+        bottom: 44px;
+      }
+      .toast {
+        max-width: 100%;
+        min-width: 0;
+      }
     }
     .app-loading {
       position: fixed;
@@ -59,7 +83,7 @@
       width: 0;
       background: linear-gradient(90deg, #6366F1, #A78BFA);
       border-radius: 2px;
-      animation: loadBar 1.5s ease forwards;
+      animation: loadBar 1.2s ease forwards;
     }
     @keyframes pulse {
       from { transform: scale(1); opacity: 0.8; }
@@ -84,7 +108,7 @@
   <div id="app" style="display:none">
 
     <!-- Hidden file inputs -->
-    <input type="file" id="file-input" accept=".pdf" style="display:none">
+    <input type="file" id="file-input" accept=".pdf,application/pdf" style="display:none">
     <input type="file" id="image-input" accept="image/*" style="display:none">
 
     <!-- TOOLBAR (injected by Toolbar.js) -->
@@ -127,95 +151,97 @@
   </div>
 
   <script type="module">
-    // ── Bootstrap: inject all component HTML, then load app.js ──
-
     import { buildToolbar } from './src/components/Toolbar.js';
     import { buildModals } from './src/components/Modals.js';
     import { buildLeftSidebar } from './src/components/LeftSidebar.js';
     import { buildRightSidebar } from './src/components/RightSidebar.js';
     import { buildPDFViewer } from './src/components/PDFViewer.js';
 
-    // Inject component HTML
-    document.getElementById('toolbar-root').innerHTML = buildToolbar();
-    document.getElementById('modals-root').innerHTML = buildModals();
-    document.getElementById('left-sidebar-root').innerHTML = buildLeftSidebar();
-    document.getElementById('right-sidebar-root').innerHTML = buildRightSidebar();
-    document.getElementById('pdf-viewer-root').innerHTML = buildPDFViewer();
+    async function bootstrap() {
+      document.getElementById('toolbar-root').innerHTML = buildToolbar();
+      document.getElementById('modals-root').innerHTML = buildModals();
+      document.getElementById('left-sidebar-root').innerHTML = buildLeftSidebar();
+      document.getElementById('right-sidebar-root').innerHTML = buildRightSidebar();
+      document.getElementById('pdf-viewer-root').innerHTML = buildPDFViewer();
 
-    // Load main app
-    await import('./src/app.js');
+      await import('./src/app.js');
 
-    // Hide splash, show app
-    const splash = document.getElementById('app-loading');
-    const app = document.getElementById('app');
-    splash.style.opacity = '0';
-    splash.style.transition = 'opacity 0.3s ease';
-    setTimeout(() => {
-      splash.remove();
-      app.style.display = 'flex';
-      app.style.flexDirection = 'column';
-      app.style.height = '100vh';
-    }, 350);
+      const splash = document.getElementById('app-loading');
+      const app = document.getElementById('app');
+      if (splash) {
+        splash.style.opacity = '0';
+        splash.style.transition = 'opacity 0.3s ease';
+        setTimeout(() => {
+          splash.remove();
+          app.style.display = 'flex';
+          app.style.flexDirection = 'column';
+          app.style.height = '100vh';
+        }, 300);
+      }
 
-    // ── File input handlers ──
-    document.getElementById('file-input').addEventListener('change', (e) => {
-      const file = e.target.files[0];
-      if (file) window.app.loadPDF(file);
-      e.target.value = '';
-    });
+      document.getElementById('file-input').addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file) window.app.loadPDF(file);
+        e.target.value = '';
+      });
 
-    document.getElementById('image-input').addEventListener('change', (e) => {
-      const file = e.target.files[0];
-      if (file) window.app.handleImageUpload?.(file);
-      e.target.value = '';
-    });
+      document.getElementById('image-input').addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file) window.app.handleImageUpload?.(file);
+        e.target.value = '';
+      });
 
-    // ── Drag-and-drop on main area ──
-    const appEl = document.getElementById('app');
-    appEl.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'copy';
-      appEl.classList.add('drag-active');
-    });
-
-    appEl.addEventListener('dragleave', (e) => {
-      if (!appEl.contains(e.relatedTarget)) appEl.classList.remove('drag-active');
-    });
-
-    appEl.addEventListener('drop', (e) => {
-      e.preventDefault();
-      appEl.classList.remove('drag-active');
-      const files = [...e.dataTransfer.files];
-      const pdf = files.find(f => f.type === 'application/pdf' || f.name.endsWith('.pdf'));
-      if (pdf) window.app.loadPDF(pdf);
-    });
-
-    // ── Merge drop zone drag events ──
-    document.addEventListener('dragover', (e) => {
-      const dz = document.getElementById('merge-drop-zone');
-      if (dz && dz.contains(e.target)) dz.classList.add('drag-over');
-    });
-    document.addEventListener('dragleave', (e) => {
-      const dz = document.getElementById('merge-drop-zone');
-      if (dz && !dz.contains(e.relatedTarget)) dz.classList.remove('drag-over');
-    });
-    document.addEventListener('drop', (e) => {
-      const dz = document.getElementById('merge-drop-zone');
-      if (dz && dz.contains(e.target)) {
+      const appEl = document.getElementById('app');
+      appEl.addEventListener('dragover', (e) => {
         e.preventDefault();
-        dz.classList.remove('drag-over');
-        window.app.handleMergeFiles([...e.dataTransfer.files]);
-      }
-    });
+        e.dataTransfer.dropEffect = 'copy';
+        appEl.classList.add('drag-active');
+      });
 
-    // Quality card selection highlight
-    document.addEventListener('change', (e) => {
-      if (e.target.name === 'compress-quality') {
-        document.querySelectorAll('.quality-card').forEach(c => c.classList.remove('active'));
-        e.target.closest('.quality-card')?.classList.add('active');
-      }
-    });
+      appEl.addEventListener('dragleave', (e) => {
+        if (!appEl.contains(e.relatedTarget)) appEl.classList.remove('drag-active');
+      });
 
+      appEl.addEventListener('drop', (e) => {
+        e.preventDefault();
+        appEl.classList.remove('drag-active');
+        const files = [...e.dataTransfer.files];
+        const pdf = files.find(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
+        if (pdf) window.app.loadPDF(pdf);
+      });
+
+      document.addEventListener('dragover', (e) => {
+        const dz = document.getElementById('merge-drop-zone');
+        if (dz && dz.contains(e.target)) dz.classList.add('drag-over');
+      });
+      document.addEventListener('dragleave', (e) => {
+        const dz = document.getElementById('merge-drop-zone');
+        if (dz && !dz.contains(e.relatedTarget)) dz.classList.remove('drag-over');
+      });
+      document.addEventListener('drop', (e) => {
+        const dz = document.getElementById('merge-drop-zone');
+        if (dz && dz.contains(e.target)) {
+          e.preventDefault();
+          dz.classList.remove('drag-over');
+          window.app.handleMergeFiles([...e.dataTransfer.files]);
+        }
+      });
+
+      document.addEventListener('change', (e) => {
+        if (e.target.name === 'compress-quality') {
+          document.querySelectorAll('.quality-card').forEach(c => c.classList.remove('active'));
+          e.target.closest('.quality-card')?.classList.add('active');
+        }
+      });
+    }
+
+    bootstrap().catch((err) => {
+      console.error('Bootstrap error:', err);
+      const splash = document.getElementById('app-loading');
+      if (splash) splash.remove();
+      const app = document.getElementById('app');
+      if (app) app.style.display = 'flex';
+    });
   </script>
 
 </body>
